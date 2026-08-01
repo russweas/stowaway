@@ -58,10 +58,10 @@ for target in "${targets[@]}"; do
         rustup target add "$target"
     fi
     cargo build --locked --release --target "$target"
-    versioned="stowaway-${version}-${target}"
+    versioned="stowaway-cli-${version}-${target}"
     mkdir -p "$dist/$versioned"
     install -Dm755 "target/$target/release/stowaway" "$dist/$versioned/stowaway"
-    tar -C "$dist" -czf "$dist/$versioned.tar.gz" "$versioned"
+    tar -C "$dist/$versioned" -czf "$dist/$versioned.tar.gz" stowaway
     if command -v sha256sum >/dev/null; then
         sha256sum "$dist/$versioned.tar.gz" > "$dist/$versioned.tar.gz.sha256"
     else

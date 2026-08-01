@@ -16,7 +16,7 @@ command -v tar >/dev/null || { echo "tar is required" >&2; exit 1; }
 
 temporary_dir=$(mktemp -d)
 trap 'rm -rf "$temporary_dir"' EXIT
-asset="stowaway-${version}-${target}"
+asset="stowaway-cli-${version}-${target}"
 base_url="https://github.com/${repo}/releases"
 if [[ "$version" == latest ]]; then
     download_url="$base_url/latest/download"
@@ -32,5 +32,5 @@ else
     shasum --algorithm 256 --check "$asset.tar.gz.sha256"
 fi)
 tar --extract --gzip --file "$temporary_dir/$asset.tar.gz" --directory "$temporary_dir"
-install -Dm755 "$temporary_dir/$asset/stowaway" "$install_dir/stowaway"
+install -Dm755 "$temporary_dir/stowaway" "$install_dir/stowaway"
 echo "Installed stowaway to $install_dir/stowaway"
