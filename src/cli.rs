@@ -17,6 +17,8 @@ pub struct Cli {
 pub enum Command {
     /// Validate one machine, or every machine when omitted.
     Validate { machine: Option<String> },
+    /// Resolve APT package ranges and write the machine lock file.
+    Lock { machine: String },
     /// Preview differences between local configuration and a host.
     Diff { machine: String },
     /// Preview and deploy a machine configuration.

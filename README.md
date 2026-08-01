@@ -52,7 +52,25 @@ timeout_seconds = 3600
 [[udev_rules]]
 source = "udev/80-storage.rules"
 name = "80-storage.rules"
+
+[[apt_packages]]
+name = "curl"
+version = ">= 7.0, < 9.0"
+
+[[apt_packages]]
+name = "docker.io"
+version = ">= 20.10"
+
+[[apt_packages]]
+name = "docker-compose"
+version = ">= 1.29"
 ```
+
+APT packages use comma-separated Debian version constraints. Run
+`stowaway lock server-01` after adding or changing them; this writes the
+checked-in `machines/server-01/machine.lock` file with exact versions resolved
+from that host's APT cache. `apply` requires this lock file and installs the
+exact locked versions.
 
 Udev rules are installed as root under `/etc/udev/rules.d` and Stowaway
 reloads the udev rule database during apply. The rule source must
@@ -90,6 +108,7 @@ current directory. It can be used with every command.
 | Command | Purpose | Options and arguments |
 | --- | --- | --- |
 | `validate [MACHINE]` | Validate one machine, or all machines when omitted. | `MACHINE` is optional. |
+| `lock MACHINE` | Resolve APT package ranges and write the lock file. | Requires an SSH-accessible Debian host. |
 | `diff MACHINE` | Preview file and script differences on a host. | `MACHINE` is required. |
 | `apply MACHINE` | Preview, confirm, and deploy a machine configuration. | `--yes` skips confirmation; `--adopt` backs up and takes ownership of unmanaged targets. |
 | `pull MACHINE` | Preview and import declared remote changes into the local worktree. | `--yes` skips confirmation. |

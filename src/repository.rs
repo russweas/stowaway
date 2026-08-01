@@ -8,6 +8,7 @@ use anyhow::{Context, Result, bail, ensure};
 use sha2::{Digest, Sha256};
 
 use crate::config::{MachineConfig, parse_mode};
+use serde::{Deserialize, Serialize};
 
 #[derive(Debug)]
 pub struct Repository {
@@ -22,6 +23,22 @@ pub struct Deployment {
     pub scripts: Vec<DeploymentScript>,
     pub digest: String,
     pub directory: PathBuf,
+    pub apt_packages: Vec<LockedAptPackage>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct LockedAptPackage {
+    pub name: String,
+    pub version: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct AptLock {
+    version: u32,
+    #[serde(default)]
+    packages: Vec<LockedAptPackage>,
 }
 
 #[derive(Debug)]
@@ -99,6 +116,7 @@ impl Repository {
             "machine directory escapes the repository: {name}"
         );
         let config = MachineConfig::parse(&directory.join("machine.toml"))?;
+        let apt_packages = load_apt_lock(&directory, &config)?;
         let metadata: BTreeMap<_, _> = config
             .metadata
             .iter()
@@ -220,7 +238,18 @@ impl Repository {
             scripts,
             digest,
             directory,
+            apt_packages,
         })
+    }
+
+    pub fn machine_config(&self, name: &str) -> Result<(MachineConfig, PathBuf)> {
+        validate_machine_name(name)?;
+        let directory = self.root.join("machines").join(name);
+        ensure!(directory.is_dir(), "machine does not exist: {name}");
+        Ok((
+            MachineConfig::parse(&directory.join("machine.toml"))?,
+            directory,
+        ))
     }
 
     pub fn git_commit(&self) -> Result<String> {
@@ -236,6 +265,65 @@ impl Repository {
         );
         Ok(String::from_utf8(output.stdout)?.trim().to_owned())
     }
+}
+
+fn load_apt_lock(directory: &Path, config: &MachineConfig) -> Result<Vec<LockedAptPackage>> {
+    let path = directory.join("machine.lock");
+    if config.apt_packages.is_empty() {
+        ensure!(
+            !path.exists(),
+            "machine.lock contains no declared APT packages"
+        );
+        return Ok(Vec::new());
+    }
+    ensure!(
+        path.is_file(),
+        "missing {}; run `stowaway lock` to create it",
+        path.display()
+    );
+    let source =
+        fs::read_to_string(&path).with_context(|| format!("could not read {}", path.display()))?;
+    let lock: AptLock =
+        toml::from_str(&source).with_context(|| format!("invalid lock file {}", path.display()))?;
+    ensure!(
+        lock.version == 1,
+        "unsupported APT lock version {}",
+        lock.version
+    );
+    ensure!(
+        lock.packages.len() == config.apt_packages.len(),
+        "APT lock does not match machine.toml; run `stowaway lock`"
+    );
+    for (declared, locked) in config.apt_packages.iter().zip(&lock.packages) {
+        ensure!(
+            declared.name == locked.name,
+            "APT lock package order differs; run `stowaway lock`"
+        );
+        ensure!(
+            !locked.version.is_empty(),
+            "APT lock contains an empty version"
+        );
+        for constraint in declared.constraints()? {
+            let status = Command::new("dpkg")
+                .args([
+                    "--compare-versions",
+                    &locked.version,
+                    &constraint.operator,
+                    &constraint.version,
+                ])
+                .status()
+                .context("could not run dpkg to validate the APT lock")?;
+            ensure!(
+                status.success(),
+                "locked APT version {} does not satisfy {} {} for {}",
+                locked.version,
+                constraint.operator,
+                constraint.version,
+                declared.name
+            );
+        }
+    }
+    Ok(lock.packages)
 }
 
 fn collect_files(
@@ -269,6 +357,10 @@ fn deployment_digest(
     let mut hash = Sha256::new();
     hash.update(b"stowaway-deployment-v1\0");
     hash_field(&mut hash, config.ssh.destination.as_bytes());
+    for package in &config.apt_packages {
+        hash_field(&mut hash, package.name.as_bytes());
+        hash_field(&mut hash, package.version.as_bytes());
+    }
     for file in files {
         hash_field(&mut hash, file.source.as_os_str().as_encoded_bytes());
         hash_field(&mut hash, file.target.as_bytes());

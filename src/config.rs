@@ -17,6 +17,27 @@ pub struct MachineConfig {
     pub scripts: Vec<ScriptConfig>,
     #[serde(default)]
     pub udev_rules: Vec<UdevRuleConfig>,
+    #[serde(default)]
+    pub apt_packages: Vec<AptPackageConfig>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AptPackageConfig {
+    pub name: String,
+    pub version: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AptConstraint {
+    pub operator: String,
+    pub version: String,
+}
+
+impl AptPackageConfig {
+    pub fn constraints(&self) -> Result<Vec<AptConstraint>> {
+        parse_version_range(&self.version)
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -156,8 +177,56 @@ impl MachineConfig {
                 rule.name
             );
         }
+        let mut packages = BTreeSet::new();
+        for package in &self.apt_packages {
+            ensure!(
+                !package.name.is_empty()
+                    && package.name.bytes().all(|byte| {
+                        byte.is_ascii_alphanumeric() || matches!(byte, b'+' | b'.' | b'-')
+                    }),
+                "invalid APT package name: {}",
+                package.name
+            );
+            ensure!(
+                packages.insert(&package.name),
+                "duplicate APT package: {}",
+                package.name
+            );
+            package.constraints()?;
+        }
         Ok(())
     }
+}
+
+pub fn parse_version_range(range: &str) -> Result<Vec<AptConstraint>> {
+    let mut constraints = Vec::new();
+    for part in range.split(',') {
+        let part = part.trim();
+        ensure!(
+            !part.is_empty(),
+            "APT version range contains an empty constraint"
+        );
+        let (operator, version) = [">=", "<=", ">", "<", "="]
+            .iter()
+            .find_map(|operator| {
+                part.strip_prefix(operator)
+                    .map(|version| (*operator, version.trim()))
+            })
+            .unwrap_or(("=", part));
+        ensure!(!version.is_empty(), "APT version constraint has no version");
+        ensure!(
+            !version.chars().any(char::is_whitespace)
+                && version.bytes().all(|byte| {
+                    byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b':' | b'+' | b'~' | b'-')
+                }),
+            "invalid APT version: {version}"
+        );
+        constraints.push(AptConstraint {
+            operator: operator.to_owned(),
+            version: version.to_owned(),
+        });
+    }
+    Ok(constraints)
 }
 
 fn validate_remote_target(target: &str) -> Result<()> {
@@ -255,9 +324,29 @@ mod tests {
                 source: "rules/10-disk.rules".into(),
                 name: "10-disk.rules".into(),
             }],
+            apt_packages: Vec::new(),
         };
         assert!(config.validate().is_ok());
         config.udev_rules[0].name = "../unsafe.rules".into();
         assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn parses_apt_version_ranges() {
+        assert_eq!(
+            parse_version_range(">= 1.2, < 2:0").unwrap(),
+            vec![
+                AptConstraint {
+                    operator: ">=".into(),
+                    version: "1.2".into()
+                },
+                AptConstraint {
+                    operator: "<".into(),
+                    version: "2:0".into()
+                },
+            ]
+        );
+        assert!(parse_version_range(">= 1.0,, < 2.0").is_err());
+        assert!(parse_version_range(">= 1.0 bad").is_err());
     }
 }

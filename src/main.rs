@@ -46,6 +46,10 @@ fn run() -> Result<()> {
                 println!("validated {} machine(s)", machines.len());
             }
         }
+        Command::Lock { machine } => {
+            let (config, directory) = repository.machine_config(&machine)?;
+            commands::lock(&config, &directory)?;
+        }
         Command::Diff { machine } => {
             let deployment = repository.load_machine(&machine)?;
             let changed = commands::diff(&deployment)?;

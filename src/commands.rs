@@ -8,6 +8,41 @@ use similar::{ChangeTag, TextDiff};
 use crate::remote::{Remote, Snapshot};
 use crate::repository::{Deployment, DeploymentFile};
 
+pub fn lock(config: &crate::config::MachineConfig, directory: &std::path::Path) -> Result<()> {
+    let remote = Remote::new(&config.ssh.destination)?;
+    let mut packages = Vec::new();
+    for package in &config.apt_packages {
+        let version = remote.resolve_apt_package(package)?;
+        println!("{}={}", package.name, version);
+        packages.push(crate::repository::LockedAptPackage {
+            name: package.name.clone(),
+            version,
+        });
+    }
+    let lock = toml::to_string_pretty(&serde_lock::AptLockWrite {
+        version: 1,
+        packages: &packages,
+    })?;
+    fs::write(directory.join("machine.lock"), lock).with_context(|| {
+        format!(
+            "could not write {}",
+            directory.join("machine.lock").display()
+        )
+    })?;
+    println!("wrote {}", directory.join("machine.lock").display());
+    Ok(())
+}
+
+mod serde_lock {
+    use serde::Serialize;
+
+    #[derive(Serialize)]
+    pub struct AptLockWrite<'a> {
+        pub version: u32,
+        pub packages: &'a [crate::repository::LockedAptPackage],
+    }
+}
+
 pub fn diff(deployment: &Deployment) -> Result<bool> {
     Ok(preview(deployment)?.0)
 }
@@ -16,6 +51,21 @@ fn preview(deployment: &Deployment) -> Result<(bool, Vec<bool>)> {
     let remote = Remote::new(&deployment.config.ssh.destination)?;
     let mut changed = false;
     let mut script_apply = Vec::with_capacity(deployment.scripts.len());
+
+    for package in &deployment.apt_packages {
+        let installed = remote.apt_package_installed(&package.name, &package.version)?;
+        println!(
+            "apt package {}={}: {}",
+            package.name,
+            package.version,
+            if installed {
+                "installed"
+            } else {
+                "install needed"
+            }
+        );
+        changed |= !installed;
+    }
 
     for file in &deployment.files {
         let snapshot = remote.inspect(&file.target, file.privileged)?;
@@ -119,6 +169,7 @@ pub fn apply(deployment: &Deployment, git_commit: &str, yes: bool, adopt: bool) 
         previous,
         adopt,
         reload_udev_rules: !deployment.config.udev_rules.is_empty(),
+        apt_packages: &deployment.apt_packages,
     })?;
     println!("applied {} ({})", deployment.name, deployment.digest);
     Ok(())

@@ -101,6 +101,7 @@ pub struct ApplyRequest<'a> {
     pub previous: &'a [ManagedPath],
     pub adopt: bool,
     pub reload_udev_rules: bool,
+    pub apt_packages: &'a [crate::repository::LockedAptPackage],
 }
 
 impl<'a> Remote<'a> {
@@ -167,6 +168,53 @@ impl<'a> Remote<'a> {
             }
             _ => bail!("unsupported state protocol response"),
         }
+    }
+
+    pub fn apt_package_installed(&self, package: &str, version: &str) -> Result<bool> {
+        let command = format!(
+            "dpkg-query -W -f='${{Status}}\\t${{Version}}\\n' -- {} 2>/dev/null | grep -Fqx -- {}",
+            shell_quote(package),
+            shell_quote(&format!("install ok installed\t{version}"))
+        );
+        let output = Command::new(&self.ssh_program)
+            .arg("--")
+            .arg(self.destination)
+            .arg(command)
+            .output()
+            .with_context(|| format!("could not start ssh for {}", self.destination))?;
+        ensure!(
+            output.status.code() != Some(255),
+            "ssh to {} failed while checking APT package",
+            self.destination
+        );
+        Ok(output.status.success())
+    }
+
+    pub fn resolve_apt_package(&self, package: &crate::config::AptPackageConfig) -> Result<String> {
+        let checks = package
+            .constraints()?
+            .iter()
+            .map(|constraint| {
+                format!(
+                    "dpkg --compare-versions \"$candidate\" {} {}",
+                    constraint.operator,
+                    shell_quote(&constraint.version)
+                )
+            })
+            .collect::<Vec<_>>()
+            .join(" && ");
+        let command = format!(
+            "set -eu; candidate=$(apt-cache policy -- {} | sed -n 's/^  Candidate: //p' | head -n 1); [ -n \"$candidate\" ] && [ \"$candidate\" != '(none)' ] && {} && printf '%s' \"$candidate\"",
+            shell_quote(&package.name),
+            checks
+        );
+        let version = String::from_utf8(self.execute(command)?)?.trim().to_owned();
+        ensure!(
+            !version.is_empty(),
+            "APT did not resolve a version for {}",
+            package.name
+        );
+        Ok(version)
     }
 
     pub fn check_script(
@@ -276,10 +324,17 @@ impl<'a> Remote<'a> {
             previous,
             adopt,
             reload_udev_rules,
+            apt_packages,
         } = request;
         let mut script = String::from(
             "set -eu\nrollback_dir=$(mktemp -d)\ncommitted=0\nrollback() { code=$?; if [ \"$committed\" = 0 ]; then while IFS='\t' read -r flag priv path backup; do run=; [ \"$priv\" = 1 ] && run='sudo -n --'; if [ \"$flag\" = present ]; then $run rm -rf -- \"$path\"; $run cp -a -- \"$backup\" \"$path\"; else $run rm -rf -- \"$path\"; fi; done < \"$rollback_dir/journal\"; fi; rm -rf -- \"$rollback_dir\"; exit $code; }\ntrap rollback EXIT HUP INT TERM\n: > \"$rollback_dir/journal\"\n",
         );
+        for package in apt_packages {
+            script.push_str(&format!(
+                "sudo -n -- apt-get install --assume-yes --no-install-recommends --no-remove -- {}\n",
+                shell_quote(&format!("{}={}", package.name, package.version))
+            ));
+        }
         let old: std::collections::BTreeSet<_> = previous.iter().map(|p| p.path.as_str()).collect();
         for (index, file) in files.iter().enumerate() {
             let target = shell_path(&file.target);
