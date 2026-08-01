@@ -84,7 +84,22 @@ after creating the Linux release, run:
 ```
 
 When the GitHub release already exists, the script uploads the new target
-instead of trying to create the release again. Other platforms can use
+instead of trying to create the release again. To compile and install directly
+from GitHub, use:
+
+```console
+cargo install --git https://github.com/russweas/stowaway.git stowaway
+```
+
+To install a prebuilt release without Cargo, run:
+
+```console
+curl --fail --location https://raw.githubusercontent.com/russweas/stowaway/main/scripts/install-release.sh | bash
+```
+
+The installer supports Linux x86_64 and macOS aarch64, verifies the checksum,
+and installs to `~/.local/bin`. Set `STOWAWAY_VERSION` for a specific version
+or `STOWAWAY_INSTALL_DIR` for another destination. Other platforms can use
 `cargo install stowaway` or build from this repository.
 
 To publish a release locally, update the `version` in `Cargo.toml`, commit and
