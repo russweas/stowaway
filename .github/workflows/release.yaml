@@ -35,9 +35,20 @@ jobs:
         run: cargo build --locked --release
 
       - name: Prepare release asset
+        env:
+          TAG: ${{ inputs.tag }}
         run: |
-          install -Dm755 target/release/stowaway dist/stowaway-linux-x86_64
-          sha256sum dist/stowaway-linux-x86_64 > dist/stowaway-linux-x86_64.sha256
+          version="${TAG#v}"
+          package_version=$(cargo metadata --locked --no-deps --format-version 1 | jq -r '.packages[0].version')
+          test "$version" = "$package_version" || {
+            echo "tag $TAG does not match Cargo.toml version $package_version" >&2
+            exit 1
+          }
+          asset="stowaway-${version}-x86_64-unknown-linux-gnu"
+          mkdir -p dist
+          install -Dm755 target/release/stowaway "dist/$asset/stowaway"
+          tar -C dist -czf "dist/$asset.tar.gz" "$asset"
+          sha256sum "dist/$asset.tar.gz" > "dist/$asset.tar.gz.sha256"
 
       - name: Create tag and GitHub release
         env:
@@ -45,8 +56,8 @@ jobs:
           TAG: ${{ inputs.tag }}
         run: |
           gh release create "$TAG" \
-            dist/stowaway-linux-x86_64 \
-            dist/stowaway-linux-x86_64.sha256 \
+            "dist/stowaway-${TAG#v}-x86_64-unknown-linux-gnu.tar.gz" \
+            "dist/stowaway-${TAG#v}-x86_64-unknown-linux-gnu.tar.gz.sha256" \
             --target "$GITHUB_SHA" \
             --title "Stowaway $TAG" \
             --generate-notes

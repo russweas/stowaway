@@ -64,6 +64,32 @@ cargo run -- pull server-01
 cargo run -- status server-01
 ```
 
+## Installing a release
+
+After publishing a release, install the Linux x86_64 binary with
+[`cargo-binstall`](https://github.com/cargo-bins/cargo-binstall):
+
+```console
+cargo binstall stowaway
+```
+
+This uses the release archive when the package is published on crates.io and
+falls back to compiling when no compatible binary is available. The current
+release workflow publishes Linux x86_64 binaries; other platforms can use
+`cargo install stowaway` or build from this repository.
+
+To publish a release, update the `version` in `Cargo.toml`, commit and push it,
+then run:
+
+```console
+./scripts/release.sh v0.1.0
+```
+
+The script requires an authenticated `gh` CLI, a clean worktree, and a local
+branch whose `HEAD` matches its `origin` branch. It dispatches the release
+workflow, which runs tests and Clippy, builds the binary, and creates the GitHub
+release with generated notes. The tag must match the Cargo version.
+
 `apply` and `pull` require a clean Git worktree and preview their changes before
 asking for confirmation. `apply --yes` and `pull --yes` skip that prompt.
 Existing unmanaged remote targets are refused; `apply --adopt` creates a
