@@ -74,21 +74,34 @@ cargo binstall stowaway
 ```
 
 This uses the release archive when the package is published on crates.io and
-falls back to compiling when no compatible binary is available. The current
-release workflow publishes Linux x86_64 binaries; other platforms can use
+falls back to compiling when no compatible binary is available. The release
+tooling publishes Linux x86_64 and macOS aarch64 binaries. By default it builds
+the current host target. To add the macOS binary from an Apple Silicon Mac
+after creating the Linux release, run:
+
+```console
+./scripts/release.sh v0.1.1 aarch64-apple-darwin
+```
+
+When the GitHub release already exists, the script uploads the new target
+instead of trying to create the release again. Other platforms can use
 `cargo install stowaway` or build from this repository.
 
-To publish a release, update the `version` in `Cargo.toml`, commit and push it,
-then run:
+To publish a release locally, update the `version` in `Cargo.toml`, commit and
+push it, then run:
 
 ```console
 ./scripts/release.sh v0.1.0
 ```
 
-The script requires an authenticated `gh` CLI, a clean worktree, and a local
-branch whose `HEAD` matches its `origin` branch. It dispatches the release
-workflow, which runs tests and Clippy, builds the binary, and creates the GitHub
-release with generated notes. The tag must match the Cargo version.
+The script requires an authenticated `gh` CLI and a clean worktree. With Git,
+the local branch must match its `origin` branch. With Jujutsu, the release
+revision must have a bookmark whose remote bookmark points to the same commit;
+the normal empty Jujutsu working-copy commit is handled automatically.
+It builds the selected target locally and creates or updates the GitHub release
+with generated notes. The tag must match the Cargo version. Building macOS
+from Linux requires an Apple SDK and cross-linker such as an osxcross setup;
+the recommended path is to build that target on an Apple Silicon Mac.
 
 `apply` and `pull` require a clean Git worktree and preview their changes before
 asking for confirmation. `apply --yes` and `pull --yes` skip that prompt.
