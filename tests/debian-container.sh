@@ -3,17 +3,62 @@ set -eu
 
 project_root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 temporary=$(mktemp -d)
-container="stowaway-test-$$"
+container="stowaway-debian"
+persistent=false
+
+usage() {
+    echo "usage: $0 [--keep] [--name CONTAINER]" >&2
+    echo "       $0 --rm [--name CONTAINER]" >&2
+}
+
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        --keep)
+            persistent=true
+            ;;
+        --name)
+            [ "$#" -ge 2 ] || { usage; exit 2; }
+            container=$2
+            shift
+            ;;
+        --rm)
+            docker rm --force -- "$container" >/dev/null 2>&1 || true
+            exit 0
+            ;;
+        --help|-h)
+            usage
+            exit 0
+            ;;
+        *)
+            usage
+            exit 2
+            ;;
+    esac
+    shift
+done
 
 cleanup() {
-    docker rm --force "$container" >/dev/null 2>&1 || true
+    if [ "$persistent" = false ]; then
+        docker rm --force "$container" >/dev/null 2>&1 || true
+    fi
     rm -rf "$temporary"
 }
 trap cleanup EXIT HUP INT TERM
 
 cargo build --manifest-path "$project_root/Cargo.toml"
 docker build --tag stowaway-debian-test "$project_root/tests/debian"
-docker run --detach --name "$container" stowaway-debian-test >/dev/null
+if [ "$persistent" = true ] && docker container inspect "$container" >/dev/null 2>&1; then
+    if [ "$(docker container inspect --format '{{.State.Running}}' "$container")" != true ]; then
+        docker start "$container" >/dev/null
+    fi
+else
+    if [ "$persistent" = true ]; then
+        docker run --detach --restart unless-stopped --name "$container" \
+            stowaway-debian-test >/dev/null
+    else
+        docker run --detach --name "$container" stowaway-debian-test >/dev/null
+    fi
+fi
 
 mkdir -p "$temporary/bin" "$temporary/repository/machines/debian/home/.config/server-tool"
 mkdir -p "$temporary/repository/machines/debian/root/etc/network"
@@ -104,3 +149,7 @@ state_after=$(docker exec "$container" grep '^content_digest = ' /var/lib/stowaw
 [ "$state_before" = "$state_after" ]
 
 printf 'Debian deployment and rollback tests passed\n'
+if [ "$persistent" = true ]; then
+    printf 'Container %s is still running; remove it with %s --rm --name %s\n' \
+        "$container" "$0" "$container"
+fi
