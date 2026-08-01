@@ -3,12 +3,13 @@ set -eu
 
 project_root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 temporary=$(mktemp -d)
-container="stowaway-debian"
+compose_file=$project_root/tests/debian/compose.yaml
+project="stowaway-debian"
 persistent=false
 
 usage() {
-    echo "usage: $0 [--keep] [--name CONTAINER]" >&2
-    echo "       $0 --rm [--name CONTAINER]" >&2
+    echo "usage: $0 [--keep] [--name PROJECT]" >&2
+    echo "       $0 --rm [--name PROJECT]" >&2
 }
 
 while [ "$#" -gt 0 ]; do
@@ -18,11 +19,12 @@ while [ "$#" -gt 0 ]; do
             ;;
         --name)
             [ "$#" -ge 2 ] || { usage; exit 2; }
-            container=$2
+            project=$2
             shift
             ;;
         --rm)
-            docker rm --force -- "$container" >/dev/null 2>&1 || true
+            docker compose --project-name "$project" --file "$compose_file" down \
+                --remove-orphans >/dev/null 2>&1 || true
             exit 0
             ;;
         --help|-h)
@@ -39,26 +41,16 @@ done
 
 cleanup() {
     if [ "$persistent" = false ]; then
-        docker rm --force "$container" >/dev/null 2>&1 || true
+        docker compose --project-name "$project" --file "$compose_file" down \
+            --remove-orphans >/dev/null 2>&1 || true
     fi
     rm -rf "$temporary"
 }
 trap cleanup EXIT HUP INT TERM
 
 cargo build --manifest-path "$project_root/Cargo.toml"
-docker build --tag stowaway-debian-test "$project_root/tests/debian"
-if [ "$persistent" = true ] && docker container inspect "$container" >/dev/null 2>&1; then
-    if [ "$(docker container inspect --format '{{.State.Running}}' "$container")" != true ]; then
-        docker start "$container" >/dev/null
-    fi
-else
-    if [ "$persistent" = true ]; then
-        docker run --detach --restart unless-stopped --name "$container" \
-            stowaway-debian-test >/dev/null
-    else
-        docker run --detach --name "$container" stowaway-debian-test >/dev/null
-    fi
-fi
+docker compose --project-name "$project" --file "$compose_file" up \
+    --detach --build
 
 mkdir -p "$temporary/bin" "$temporary/repository/machines/debian/home/.config/server-tool"
 mkdir -p "$temporary/repository/machines/debian/root/etc/network"
@@ -87,8 +79,9 @@ set -eu
 shift
 [ "\$1" = debian-container ]
 shift
-exec docker exec --interactive --env HOME=/home/stowaway \
-    --workdir /home/stowaway '$container' bash -c "\$1"
+exec docker compose --project-name '$project' --file '$compose_file' exec \
+    --interactive --env HOME=/home/stowaway --workdir /home/stowaway \
+    --no-tty debian bash -c "\$1"
 EOF
 chmod 0755 "$temporary/bin/ssh"
 
@@ -102,16 +95,22 @@ git -C "$temporary/repository" \
 PATH="$temporary/bin:$PATH" "$project_root/target/debug/stowaway" \
     --repo "$temporary/repository" apply debian --yes
 
-docker exec "$container" test -L /home/stowaway/.config/server-tool/config
-docker exec "$container" test -L /etc/network/config
-docker exec "$container" grep --fixed-strings --line-regexp 'home configuration' \
+docker compose --project-name "$project" --file "$compose_file" exec --no-tty debian \
+    test -L /home/stowaway/.config/server-tool/config
+docker compose --project-name "$project" --file "$compose_file" exec --no-tty debian \
+    test -L /etc/network/config
+docker compose --project-name "$project" --file "$compose_file" exec --no-tty debian \
+    grep --fixed-strings --line-regexp 'home configuration' \
     /home/stowaway/.config/server-tool/config
-docker exec "$container" grep --fixed-strings --line-regexp 'network configuration' \
+docker compose --project-name "$project" --file "$compose_file" exec --no-tty debian \
+    grep --fixed-strings --line-regexp 'network configuration' \
     /etc/network/config
-docker exec "$container" grep --fixed-strings --line-regexp 'machine = "debian"' \
+docker compose --project-name "$project" --file "$compose_file" exec --no-tty debian \
+    grep --fixed-strings --line-regexp 'machine = "debian"' \
     /var/lib/stowaway/state.toml
 
-state_before=$(docker exec "$container" grep '^content_digest = ' /var/lib/stowaway/state.toml)
+state_before=$(docker compose --project-name "$project" --file "$compose_file" exec \
+    --no-tty debian grep '^content_digest = ' /var/lib/stowaway/state.toml)
 printf 'changed home configuration\n' \
     > "$temporary/repository/machines/debian/home/.config/server-tool/config"
 printf 'changed network configuration\n' \
@@ -141,15 +140,18 @@ if PATH="$temporary/bin:$PATH" "$project_root/target/debug/stowaway" \
     exit 1
 fi
 
-docker exec "$container" grep --fixed-strings --line-regexp 'home configuration' \
+docker compose --project-name "$project" --file "$compose_file" exec --no-tty debian \
+    grep --fixed-strings --line-regexp 'home configuration' \
     /home/stowaway/.config/server-tool/config
-docker exec "$container" grep --fixed-strings --line-regexp 'network configuration' \
+docker compose --project-name "$project" --file "$compose_file" exec --no-tty debian \
+    grep --fixed-strings --line-regexp 'network configuration' \
     /etc/network/config
-state_after=$(docker exec "$container" grep '^content_digest = ' /var/lib/stowaway/state.toml)
+state_after=$(docker compose --project-name "$project" --file "$compose_file" exec \
+    --no-tty debian grep '^content_digest = ' /var/lib/stowaway/state.toml)
 [ "$state_before" = "$state_after" ]
 
 printf 'Debian deployment and rollback tests passed\n'
 if [ "$persistent" = true ]; then
-    printf 'Container %s is still running; remove it with %s --rm --name %s\n' \
-        "$container" "$0" "$container"
+    printf 'Compose project %s is still running; remove it with %s --rm --name %s\n' \
+        "$project" "$0" "$project"
 fi
