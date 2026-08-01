@@ -1,10 +1,14 @@
 [package]
-name = "stowaway"
+name = "stowaway-cli"
 version = "0.1.1"
 edition = "2024"
 description = "Server configuration and networking deployment over SSH"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/russweas/stowaway"
+
+[[bin]]
+name = "stowaway"
+path = "src/main.rs"
 
 [dependencies]
 anyhow = "1.0"

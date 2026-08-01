@@ -70,7 +70,7 @@ After publishing a release, install the Linux x86_64 binary with
 [`cargo-binstall`](https://github.com/cargo-bins/cargo-binstall):
 
 ```console
-cargo binstall stowaway
+cargo binstall stowaway-cli
 ```
 
 This uses the release archive when the package is published on crates.io and
@@ -88,7 +88,7 @@ instead of trying to create the release again. To compile and install directly
 from GitHub, use:
 
 ```console
-cargo install --git https://github.com/russweas/stowaway.git stowaway
+cargo install --git https://github.com/russweas/stowaway.git --bin stowaway
 ```
 
 To install a prebuilt release without Cargo, run:
@@ -100,7 +100,7 @@ curl --fail --location https://raw.githubusercontent.com/russweas/stowaway/main/
 The installer supports Linux x86_64 and macOS aarch64, verifies the checksum,
 and installs to `~/.local/bin`. Set `STOWAWAY_VERSION` for a specific version
 or `STOWAWAY_INSTALL_DIR` for another destination. Other platforms can use
-`cargo install stowaway` or build from this repository.
+`cargo install stowaway-cli` or build from this repository.
 
 To publish a release locally, update the `version` in `Cargo.toml`, commit and
 push it, then run:
