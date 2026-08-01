@@ -179,6 +179,38 @@ impl Repository {
             });
         }
 
+        for rule in &config.udev_rules {
+            let path = directory.join(&rule.source);
+            let canonical_rule = path
+                .canonicalize()
+                .with_context(|| format!("udev rule does not exist: {}", path.display()))?;
+            ensure!(
+                canonical_rule.starts_with(&canonical_directory),
+                "udev rule escapes the machine directory: {}",
+                rule.source.display()
+            );
+            let info = fs::symlink_metadata(&path)
+                .with_context(|| format!("udev rule does not exist: {}", path.display()))?;
+            ensure!(
+                info.file_type().is_file(),
+                "udev rule must be a regular file: {}",
+                path.display()
+            );
+            let target = format!("/etc/udev/rules.d/{}", rule.name);
+            ensure!(
+                targets.insert(target.clone()),
+                "duplicate remote target {target}"
+            );
+            files.push(DeploymentFile {
+                source: rule.source.clone(),
+                target,
+                privileged: true,
+                mode: 0o644,
+                contents: fs::read(&path)
+                    .with_context(|| format!("could not read {}", path.display()))?,
+            });
+        }
+
         files.sort_by(|a, b| a.target.cmp(&b.target));
         let digest = deployment_digest(&config, &files, &directory)?;
         Ok(Deployment {
@@ -287,10 +319,16 @@ mod tests {
         let machine = temp.path().join("machines/test");
         fs::create_dir_all(machine.join("home/.config/app")).unwrap();
         fs::create_dir_all(machine.join("root/etc/network/interfaces.d")).unwrap();
+        fs::create_dir_all(machine.join("udev")).unwrap();
         fs::write(machine.join("home/.config/app/config"), "value=true\n").unwrap();
         fs::write(
             machine.join("root/etc/network/interfaces.d/eth0"),
             "auto eth0\n",
+        )
+        .unwrap();
+        fs::write(
+            machine.join("udev/80-example.rules"),
+            "SUBSYSTEM==\"block\", ENV{ID_FS_TYPE}==\"ext4\", TAG+=\"stowaway\"\n",
         )
         .unwrap();
         let mut script = fs::File::create(machine.join("setup.sh")).unwrap();
@@ -313,6 +351,9 @@ source = "root/etc/network/interfaces.d/eth0"
 mode = "0600"
 [[scripts]]
 path = "setup.sh"
+[[udev_rules]]
+source = "udev/80-example.rules"
+name = "80-example.rules"
 "#,
         )
         .unwrap();
@@ -354,7 +395,7 @@ path = "setup.sh"
         let repo = Repository::open(temp.path().to_owned()).unwrap();
         let first = repo.load_machine("test").unwrap();
         let second = repo.load_machine("test").unwrap();
-        assert_eq!(first.files.len(), 2);
+        assert_eq!(first.files.len(), 3);
         assert_eq!(first.digest, second.digest);
         assert_eq!(
             first
@@ -364,6 +405,15 @@ path = "setup.sh"
                 .unwrap()
                 .mode,
             0o600
+        );
+        assert_eq!(
+            first
+                .files
+                .iter()
+                .find(|file| file.target == "/etc/udev/rules.d/80-example.rules")
+                .unwrap()
+                .mode,
+            0o644
         );
     }
 

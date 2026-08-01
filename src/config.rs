@@ -15,6 +15,8 @@ pub struct MachineConfig {
     pub metadata: Vec<FileMetadata>,
     #[serde(default)]
     pub scripts: Vec<ScriptConfig>,
+    #[serde(default)]
+    pub udev_rules: Vec<UdevRuleConfig>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -47,6 +49,13 @@ pub struct ScriptConfig {
     pub privileged: bool,
     #[serde(default = "default_timeout")]
     pub timeout_seconds: u64,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct UdevRuleConfig {
+    pub source: PathBuf,
+    pub name: String,
 }
 
 fn default_timeout() -> u64 {
@@ -124,6 +133,27 @@ impl MachineConfig {
             ensure!(
                 script.timeout_seconds > 0,
                 "script timeout must be greater than zero"
+            );
+        }
+
+        let mut udev_rules = BTreeSet::new();
+        for rule in &self.udev_rules {
+            validate_relative(&rule.source, "udev rule source")?;
+            ensure!(
+                udev_rules.insert(rule.source.clone()),
+                "duplicate udev rule source {}",
+                rule.source.display()
+            );
+            ensure!(
+                rule.name.ends_with(".rules")
+                    && !rule.name.is_empty()
+                    && rule
+                        .name
+                        .bytes()
+                        .all(|byte| byte.is_ascii_alphanumeric()
+                            || matches!(byte, b'-' | b'_' | b'.')),
+                "udev rule name must be a simple .rules filename: {}",
+                rule.name
             );
         }
         Ok(())
@@ -205,5 +235,29 @@ mod tests {
         assert!(validate_remote_target("~/.config").is_ok());
         assert!(validate_remote_target("/etc/network").is_ok());
         assert!(validate_remote_target("~/bad\tname").is_err());
+    }
+
+    #[test]
+    fn validates_udev_rule_names() {
+        let mut config = MachineConfig {
+            version: 1,
+            ssh: SshConfig {
+                destination: "host".into(),
+            },
+            trees: vec![TreeConfig {
+                source: "home".into(),
+                target: "~".into(),
+                privileged: false,
+            }],
+            metadata: Vec::new(),
+            scripts: Vec::new(),
+            udev_rules: vec![UdevRuleConfig {
+                source: "rules/10-disk.rules".into(),
+                name: "10-disk.rules".into(),
+            }],
+        };
+        assert!(config.validate().is_ok());
+        config.udev_rules[0].name = "../unsafe.rules".into();
+        assert!(config.validate().is_err());
     }
 }

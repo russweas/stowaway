@@ -100,6 +100,7 @@ pub struct ApplyRequest<'a> {
     pub script_apply: &'a [bool],
     pub previous: &'a [ManagedPath],
     pub adopt: bool,
+    pub reload_udev_rules: bool,
 }
 
 impl<'a> Remote<'a> {
@@ -207,6 +208,37 @@ impl<'a> Remote<'a> {
         parse_script_check(output, self.destination)
     }
 
+    pub fn monitor_devices(&self, subsystem: Option<&str>) -> Result<()> {
+        if let Some(subsystem) = subsystem {
+            ensure!(
+                !subsystem.is_empty()
+                    && subsystem
+                        .bytes()
+                        .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_'),
+                "udev subsystem must contain only ASCII letters, digits, and underscores"
+            );
+        }
+        let filter = subsystem
+            .map(|value| format!(" --subsystem-match={}", shell_quote(value)))
+            .unwrap_or_default();
+        let command = format!("udevadm monitor --udev --property{filter}");
+        let status = Command::new(&self.ssh_program)
+            .arg("--")
+            .arg(self.destination)
+            .arg(command)
+            .stdout(Stdio::inherit())
+            .stderr(Stdio::inherit())
+            .status()
+            .with_context(|| format!("could not start ssh for {}", self.destination))?;
+        ensure!(
+            status.success(),
+            "udev monitor on {} exited with {}",
+            self.destination,
+            status
+        );
+        Ok(())
+    }
+
     pub fn stage_file(
         &self,
         digest: &str,
@@ -243,6 +275,7 @@ impl<'a> Remote<'a> {
             script_apply,
             previous,
             adopt,
+            reload_udev_rules,
         } = request;
         let mut script = String::from(
             "set -eu\nrollback_dir=$(mktemp -d)\ncommitted=0\nrollback() { code=$?; if [ \"$committed\" = 0 ]; then while IFS='\t' read -r flag priv path backup; do run=; [ \"$priv\" = 1 ] && run='sudo -n --'; if [ \"$flag\" = present ]; then $run rm -rf -- \"$path\"; $run cp -a -- \"$backup\" \"$path\"; else $run rm -rf -- \"$path\"; fi; done < \"$rollback_dir/journal\"; fi; rm -rf -- \"$rollback_dir\"; exit $code; }\ntrap rollback EXIT HUP INT TERM\n: > \"$rollback_dir/journal\"\n",
@@ -301,6 +334,9 @@ impl<'a> Remote<'a> {
                 ""
             };
             script.push_str(&format!("{run}timeout --signal=TERM --kill-after=5s {} bash -s -- apply <<'STOWAWAY_SCRIPT'\n{}\nSTOWAWAY_SCRIPT\n", shell_quote(&timeout), String::from_utf8_lossy(&script_item.contents)));
+        }
+        if reload_udev_rules {
+            script.push_str("sudo -n -- udevadm control --reload-rules\n");
         }
         let managed_paths = files
             .iter()

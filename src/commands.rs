@@ -78,6 +78,11 @@ pub fn status(deployment: &Deployment) -> Result<()> {
     Ok(())
 }
 
+pub fn devices(deployment: &Deployment, subsystem: Option<&str>) -> Result<()> {
+    let remote = Remote::new(&deployment.config.ssh.destination)?;
+    remote.monitor_devices(subsystem)
+}
+
 pub fn apply(deployment: &Deployment, git_commit: &str, yes: bool, adopt: bool) -> Result<()> {
     let (changed, script_apply) = preview(deployment)?;
     let remote = Remote::new(&deployment.config.ssh.destination)?;
@@ -113,6 +118,7 @@ pub fn apply(deployment: &Deployment, git_commit: &str, yes: bool, adopt: bool) 
         script_apply: &script_apply,
         previous,
         adopt,
+        reload_udev_rules: !deployment.config.udev_rules.is_empty(),
     })?;
     println!("applied {} ({})", deployment.name, deployment.digest);
     Ok(())

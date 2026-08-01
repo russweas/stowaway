@@ -38,4 +38,11 @@ pub enum Command {
     },
     /// Show the last deployment recorded on a host.
     Status { machine: String },
+    /// Stream information about devices added to a host.
+    Devices {
+        machine: String,
+        /// Limit events to one udev subsystem, such as block or net.
+        #[arg(long)]
+        subsystem: Option<String>,
+    },
 }

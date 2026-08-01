@@ -19,6 +19,8 @@ machines/
       etc/network/interfaces.d/10-server
     scripts/
       networking.sh
+    udev/
+      80-storage.rules
 ```
 
 Example `machine.toml`:
@@ -46,7 +48,17 @@ mode = "0644"
 path = "scripts/networking.sh"
 privileged = false
 timeout_seconds = 3600
+
+[[udev_rules]]
+source = "udev/80-storage.rules"
+name = "80-storage.rules"
 ```
+
+Udev rules are installed as root under `/etc/udev/rules.d` and Stowaway
+reloads the udev rule database during apply. The rule source must
+be a regular file and its configured name must be a simple `.rules` filename.
+Rules affect subsequent udev events; use `stowaway devices` to watch those
+events and inspect the properties reported by the host.
 
 Scripts receive either `check` or `apply` as their first argument. `check`
 returns 0 when the host is already configured, 10 when an apply is needed, and
@@ -62,7 +74,55 @@ cargo run -- apply server-01 --yes
 cargo run -- apply server-01 --adopt
 cargo run -- pull server-01
 cargo run -- status server-01
+cargo run -- devices server-01
+cargo run -- devices server-01 --subsystem block
 ```
+
+`devices` runs `udevadm monitor --udev --property` over SSH and streams device
+events until interrupted. It uses the host's normal udev permissions and does
+not change the server.
+
+## Command reference
+
+The global `--repo PATH` option selects the repository root and defaults to the
+current directory. It can be used with every command.
+
+| Command | Purpose | Options and arguments |
+| --- | --- | --- |
+| `validate [MACHINE]` | Validate one machine, or all machines when omitted. | `MACHINE` is optional. |
+| `diff MACHINE` | Preview file and script differences on a host. | `MACHINE` is required. |
+| `apply MACHINE` | Preview, confirm, and deploy a machine configuration. | `--yes` skips confirmation; `--adopt` backs up and takes ownership of unmanaged targets. |
+| `pull MACHINE` | Preview and import declared remote changes into the local worktree. | `--yes` skips confirmation. |
+| `status MACHINE` | Show the last deployment recorded on a host. | `MACHINE` is required. |
+| `devices MACHINE` | Stream newly observed udev device events and properties from a host. | `--subsystem NAME` filters events, for example `block` or `net`. |
+
+Examples:
+
+```console
+stowaway --repo ./infra validate
+stowaway diff server-01
+stowaway apply server-01 --yes
+stowaway pull server-01 --yes
+stowaway status server-01
+stowaway devices server-01 --subsystem block
+```
+
+## How Stowaway compares
+
+These tools overlap in configuration management, but they solve different
+problems and operate at different scopes:
+
+| Tool | Primary model | Where it runs | Best fit | How Stowaway differs |
+| --- | --- | --- | --- | --- |
+| **Stowaway** | Git-managed per-machine files, scripts, and udev rules; transactional deployment over SSH. | Locally, with the target server accessed through its existing OpenSSH setup. | Small fleets and administrators who want reviewable server configuration without installing an agent. | Focuses on explicit file ownership, previews, pull, adoption backups, and rollback rather than continuous convergence. |
+| [Puppet](https://www.puppet.com/) | Declarative resource catalogs with recurring convergence. | Usually a Puppet agent on each node, commonly backed by a Puppet server. | Organization-wide policy, inventory, secrets integration, and large heterogeneous fleets. | Stowaway has no agent or central server and leaves scheduling and orchestration to the operator or existing automation. |
+| [Nix Home Manager](https://github.com/nix-community/home-manager) | Declarative Nix expressions for a reproducible user environment and generations. | Primarily on the local machine or user account, using the Nix store. | Reproducible packages, shell environments, and user-level dotfiles with generation-based rollbacks. | Stowaway uses ordinary files in a Git repository, targets remote Linux servers, and supports privileged system files and operational scripts without requiring Nix. |
+| [GNU Stow](https://www.gnu.org/software/stow/) | A symlink farm that maps package directories into a local filesystem tree. | Locally on one filesystem. | Lightweight management of dotfiles or independently packaged local software. | Stowaway adds SSH transport, manifest validation, remote inspection, deployment state, transactional apply, and machine-specific configuration. |
+
+In short, choose Stowaway when the deployment boundary is a server reached by
+SSH and you want a small, inspectable Git workflow. Choose Puppet for managed
+fleet policy and continuous enforcement, Home Manager for reproducible Nix
+user environments, or GNU Stow for simple local symlink management.
 
 ## Installing a release
 

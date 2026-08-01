@@ -72,6 +72,10 @@ fn run() -> Result<()> {
             let deployment = repository.load_machine(&machine)?;
             commands::pull(&deployment, yes)?;
         }
+        Command::Devices { machine, subsystem } => {
+            let deployment = repository.load_machine(&machine)?;
+            commands::devices(&deployment, subsystem.as_deref())?;
+        }
     }
 
     Ok(())

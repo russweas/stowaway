@@ -69,6 +69,8 @@ for target in "${targets[@]}"; do
     fi
 done
 
+cargo publish --locked
+
 assets=("$dist"/*.tar.gz "$dist"/*.tar.gz.sha256)
 if gh release view "$tag" >/dev/null 2>&1; then
     gh release upload "$tag" "${assets[@]}" --clobber
