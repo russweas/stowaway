@@ -102,6 +102,7 @@ pub struct ApplyRequest<'a> {
     pub adopt: bool,
     pub reload_udev_rules: bool,
     pub apt_packages: &'a [crate::repository::LockedAptPackage],
+    pub containers: &'a [crate::repository::DeploymentContainer],
 }
 
 impl<'a> Remote<'a> {
@@ -217,6 +218,35 @@ impl<'a> Remote<'a> {
         Ok(version)
     }
 
+    pub fn check_container(
+        &self,
+        container: &crate::repository::DeploymentContainer,
+    ) -> Result<bool> {
+        let name = shell_quote(&container.config.name);
+        let digest = shell_quote(&container.digest);
+        let image = shell_quote("{{.State.Running}}");
+        let command = format!(
+            "set -eu; [ \"$(sudo -n -- docker inspect --format {} -- {} 2>/dev/null)\" = true ] && [ \"$(sudo -n -- docker inspect --format {} -- {} 2>/dev/null)\" = {} ]",
+            image,
+            name,
+            shell_quote("{{index .Config.Labels \"com.stowaway.container-digest\"}}"),
+            name,
+            digest
+        );
+        let output = Command::new(&self.ssh_program)
+            .arg("--")
+            .arg(self.destination)
+            .arg(command)
+            .output()
+            .with_context(|| format!("could not start ssh for {}", self.destination))?;
+        ensure!(
+            output.status.code() != Some(255),
+            "ssh to {} failed while checking Docker container",
+            self.destination
+        );
+        Ok(output.status.success())
+    }
+
     pub fn check_script(
         &self,
         script: &[u8],
@@ -325,6 +355,7 @@ impl<'a> Remote<'a> {
             adopt,
             reload_udev_rules,
             apt_packages,
+            containers,
         } = request;
         let mut script = String::from(
             "set -eu\nrollback_dir=$(mktemp -d)\ncommitted=0\nrollback() { code=$?; if [ \"$committed\" = 0 ]; then while IFS='\t' read -r flag priv path backup; do run=; [ \"$priv\" = 1 ] && run='sudo -n --'; if [ \"$flag\" = present ]; then $run rm -rf -- \"$path\"; $run cp -a -- \"$backup\" \"$path\"; else $run rm -rf -- \"$path\"; fi; done < \"$rollback_dir/journal\"; fi; rm -rf -- \"$rollback_dir\"; exit $code; }\ntrap rollback EXIT HUP INT TERM\n: > \"$rollback_dir/journal\"\n",
@@ -334,6 +365,25 @@ impl<'a> Remote<'a> {
                 "sudo -n -- apt-get install --assume-yes --no-install-recommends --no-remove -- {}\n",
                 shell_quote(&format!("{}={}", package.name, package.version))
             ));
+        }
+        for container in containers {
+            let name = shell_quote(&container.config.name);
+            let mut command = format!(
+                "sudo -n -- docker rm --force -- {name} >/dev/null 2>&1 || true\nsudo -n -- docker run --detach --name {name} --restart {} --label {}",
+                shell_quote(&container.config.restart),
+                shell_quote(&format!(
+                    "com.stowaway.container-digest={}",
+                    container.digest
+                ))
+            );
+            for port in &container.config.ports {
+                command.push_str(&format!(" --publish {}", shell_quote(port)));
+            }
+            for environment in &container.config.environment {
+                command.push_str(&format!(" --env {}", shell_quote(environment)));
+            }
+            command.push_str(&format!(" -- {}\n", shell_quote(&container.config.image)));
+            script.push_str(&command);
         }
         let old: std::collections::BTreeSet<_> = previous.iter().map(|p| p.path.as_str()).collect();
         for (index, file) in files.iter().enumerate() {
@@ -664,5 +714,69 @@ privileged = true
 
         assert!(error.to_string().contains("ssh to fake-host failed"));
         assert!(error.to_string().contains("connection refused"));
+    }
+
+    #[test]
+    fn fake_ssh_container_environment_checks_convergence_and_updates() {
+        let directory = tempfile::tempdir().unwrap();
+        let ssh = directory.path().join("ssh");
+        let state = directory.path().join("container-ready");
+        let transcript = directory.path().join("apply-command");
+        fs::write(
+            &ssh,
+            format!(
+                "#!/bin/sh\nstate={}\ntranscript={}\ncommand=$3\ncase \"$command\" in\n  *docker\\ inspect*)\n    if [ ! -f \"$state\" ]; then exit 1; fi\n    case \"$command\" in\n      *container-digest*) [ \"$(cat \"$state\")\" = container-digest ] || exit 1 ;;\n    esac\n    case \"$command\" in\n      *State.Running*) printf 'true' ;;\n      *) cat \"$state\" ;;\n    esac\n    exit 0\n    ;;\n  *bash\\ -c*) printf '%s' \"$command\" > \"$transcript\"; exit 0 ;;\n  *) exit 0 ;;\nesac\n",
+                shell_quote(&state.to_string_lossy()),
+                shell_quote(&transcript.to_string_lossy())
+            ),
+        )
+        .unwrap();
+        let mut permissions = fs::metadata(&ssh).unwrap().permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(&ssh, permissions).unwrap();
+
+        let config = crate::config::ContainerConfig {
+            name: "web".into(),
+            image: "nginx:1.27".into(),
+            restart: "unless-stopped".into(),
+            ports: vec!["8080:80".into()],
+            environment: vec!["APP_ENV=production".into()],
+        };
+        let container = crate::repository::DeploymentContainer {
+            config,
+            digest: "container-digest".into(),
+        };
+        let remote = Remote::with_ssh_program("fake-host", &ssh).unwrap();
+
+        assert!(!remote.check_container(&container).unwrap());
+        remote
+            .apply_transaction(ApplyRequest {
+                machine: "test",
+                digest: "deployment-digest",
+                git_commit: "commit",
+                files: &[],
+                scripts: &[],
+                script_apply: &[],
+                previous: &[],
+                adopt: false,
+                reload_udev_rules: false,
+                apt_packages: &[],
+                containers: std::slice::from_ref(&container),
+            })
+            .unwrap();
+        let apply_command = fs::read_to_string(&transcript).unwrap();
+        assert!(apply_command.contains("docker rm --force"));
+        assert!(apply_command.contains("docker run --detach"));
+        assert!(apply_command.contains("--publish"));
+        assert!(apply_command.contains("8080:80"));
+        assert!(apply_command.contains("--env"));
+        assert!(apply_command.contains("APP_ENV=production"));
+        assert!(apply_command.contains("nginx:1.27"));
+
+        fs::write(&state, "container-digest").unwrap();
+        assert!(remote.check_container(&container).unwrap());
+
+        fs::write(&state, "old-digest").unwrap();
+        assert!(!remote.check_container(&container).unwrap());
     }
 }

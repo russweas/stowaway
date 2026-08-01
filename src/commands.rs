@@ -67,6 +67,16 @@ fn preview(deployment: &Deployment) -> Result<(bool, Vec<bool>)> {
         changed |= !installed;
     }
 
+    for container in &deployment.containers {
+        let running = remote.check_container(container)?;
+        println!(
+            "container {}: {}",
+            container.config.name,
+            if running { "running" } else { "apply needed" }
+        );
+        changed |= !running;
+    }
+
     for file in &deployment.files {
         let snapshot = remote.inspect(&file.target, file.privileged)?;
         if print_file_diff(file, snapshot) {
@@ -170,6 +180,7 @@ pub fn apply(deployment: &Deployment, git_commit: &str, yes: bool, adopt: bool) 
         adopt,
         reload_udev_rules: !deployment.config.udev_rules.is_empty(),
         apt_packages: &deployment.apt_packages,
+        containers: &deployment.containers,
     })?;
     println!("applied {} ({})", deployment.name, deployment.digest);
     Ok(())

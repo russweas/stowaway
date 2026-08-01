@@ -7,7 +7,7 @@ use std::process::Command;
 use anyhow::{Context, Result, bail, ensure};
 use sha2::{Digest, Sha256};
 
-use crate::config::{MachineConfig, parse_mode};
+use crate::config::{ContainerConfig, MachineConfig, parse_mode};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug)]
@@ -24,6 +24,7 @@ pub struct Deployment {
     pub digest: String,
     pub directory: PathBuf,
     pub apt_packages: Vec<LockedAptPackage>,
+    pub containers: Vec<DeploymentContainer>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
@@ -31,6 +32,12 @@ pub struct Deployment {
 pub struct LockedAptPackage {
     pub name: String,
     pub version: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct DeploymentContainer {
+    pub config: ContainerConfig,
+    pub digest: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -117,6 +124,14 @@ impl Repository {
         );
         let config = MachineConfig::parse(&directory.join("machine.toml"))?;
         let apt_packages = load_apt_lock(&directory, &config)?;
+        let containers = config
+            .containers
+            .iter()
+            .map(|container| DeploymentContainer {
+                digest: container_digest(container),
+                config: container.clone(),
+            })
+            .collect();
         let metadata: BTreeMap<_, _> = config
             .metadata
             .iter()
@@ -239,6 +254,7 @@ impl Repository {
             digest,
             directory,
             apt_packages,
+            containers,
         })
     }
 
@@ -361,6 +377,17 @@ fn deployment_digest(
         hash_field(&mut hash, package.name.as_bytes());
         hash_field(&mut hash, package.version.as_bytes());
     }
+    for container in &config.containers {
+        hash_field(&mut hash, container.name.as_bytes());
+        hash_field(&mut hash, container.image.as_bytes());
+        hash_field(&mut hash, container.restart.as_bytes());
+        for port in &container.ports {
+            hash_field(&mut hash, port.as_bytes());
+        }
+        for environment in &container.environment {
+            hash_field(&mut hash, environment.as_bytes());
+        }
+    }
     for file in files {
         hash_field(&mut hash, file.source.as_os_str().as_encoded_bytes());
         hash_field(&mut hash, file.target.as_bytes());
@@ -375,6 +402,22 @@ fn deployment_digest(
         hash_field(&mut hash, &fs::read(directory.join(&script.path))?);
     }
     Ok(hex::encode(hash.finalize()))
+}
+
+fn container_digest(container: &ContainerConfig) -> String {
+    let mut hash = Sha256::new();
+    hash.update(b"stowaway-container-v1\0");
+    for value in [
+        container.name.as_str(),
+        &container.image,
+        &container.restart,
+    ] {
+        hash_field(&mut hash, value.as_bytes());
+    }
+    for value in container.ports.iter().chain(container.environment.iter()) {
+        hash_field(&mut hash, value.as_bytes());
+    }
+    hex::encode(hash.finalize())
 }
 
 fn hash_field(hash: &mut Sha256, value: &[u8]) {

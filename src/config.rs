@@ -19,6 +19,25 @@ pub struct MachineConfig {
     pub udev_rules: Vec<UdevRuleConfig>,
     #[serde(default)]
     pub apt_packages: Vec<AptPackageConfig>,
+    #[serde(default)]
+    pub containers: Vec<ContainerConfig>,
+}
+
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct ContainerConfig {
+    pub name: String,
+    pub image: String,
+    #[serde(default = "default_restart_policy")]
+    pub restart: String,
+    #[serde(default)]
+    pub ports: Vec<String>,
+    #[serde(default)]
+    pub environment: Vec<String>,
+}
+
+fn default_restart_policy() -> String {
+    "unless-stopped".into()
 }
 
 #[derive(Debug, Deserialize)]
@@ -194,8 +213,76 @@ impl MachineConfig {
             );
             package.constraints()?;
         }
+        let mut containers = BTreeSet::new();
+        for container in &self.containers {
+            ensure!(
+                !container.name.is_empty()
+                    && container.name.len() <= 128
+                    && container.name.as_bytes()[0].is_ascii_alphanumeric()
+                    && container.name.bytes().all(|byte| {
+                        byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'.' | b'-')
+                    }),
+                "invalid Docker container name: {}",
+                container.name
+            );
+            ensure!(
+                containers.insert(&container.name),
+                "duplicate Docker container: {}",
+                container.name
+            );
+            ensure!(
+                !container.image.is_empty()
+                    && !container.image.chars().any(char::is_whitespace)
+                    && !container.image.contains(['\n', '\r', '\0']),
+                "invalid Docker image: {}",
+                container.image
+            );
+            ensure!(
+                matches!(
+                    container.restart.as_str(),
+                    "no" | "always" | "on-failure" | "unless-stopped"
+                ),
+                "invalid Docker restart policy: {}",
+                container.restart
+            );
+            for port in &container.ports {
+                validate_port_mapping(port)?;
+            }
+            for environment in &container.environment {
+                let (key, _) = environment.split_once('=').with_context(|| {
+                    format!("Docker environment entry must be KEY=VALUE: {environment}")
+                })?;
+                ensure!(
+                    !key.is_empty()
+                        && key.bytes().all(|byte| {
+                            byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-')
+                        }),
+                    "invalid Docker environment key: {key}"
+                );
+            }
+        }
         Ok(())
     }
+}
+
+fn validate_port_mapping(mapping: &str) -> Result<()> {
+    let (host, container) = mapping
+        .split_once(':')
+        .context("Docker port must use HOST:CONTAINER format")?;
+    ensure!(
+        !host.is_empty() && !container.is_empty() && !mapping.contains(['\n', '\r', '\t', '\0']),
+        "invalid Docker port mapping: {mapping}"
+    );
+    for port in [host, container] {
+        let value: u16 = port
+            .parse()
+            .with_context(|| format!("invalid Docker port in mapping: {mapping}"))?;
+        ensure!(
+            value > 0,
+            "Docker ports must be greater than zero: {mapping}"
+        );
+    }
+    Ok(())
 }
 
 pub fn parse_version_range(range: &str) -> Result<Vec<AptConstraint>> {
@@ -325,6 +412,7 @@ mod tests {
                 name: "10-disk.rules".into(),
             }],
             apt_packages: Vec::new(),
+            containers: Vec::new(),
         };
         assert!(config.validate().is_ok());
         config.udev_rules[0].name = "../unsafe.rules".into();
@@ -348,5 +436,37 @@ mod tests {
         );
         assert!(parse_version_range(">= 1.0,, < 2.0").is_err());
         assert!(parse_version_range(">= 1.0 bad").is_err());
+    }
+
+    #[test]
+    fn validates_containers() {
+        let mut config = MachineConfig {
+            version: 1,
+            ssh: SshConfig {
+                destination: "host".into(),
+            },
+            trees: vec![TreeConfig {
+                source: "home".into(),
+                target: "~".into(),
+                privileged: false,
+            }],
+            metadata: Vec::new(),
+            scripts: Vec::new(),
+            udev_rules: Vec::new(),
+            apt_packages: Vec::new(),
+            containers: vec![ContainerConfig {
+                name: "web".into(),
+                image: "nginx:1.27".into(),
+                restart: "unless-stopped".into(),
+                ports: vec!["8080:80".into()],
+                environment: vec!["APP_ENV=production".into()],
+            }],
+        };
+        assert!(config.validate().is_ok());
+        config.containers[0].ports[0] = "8080:bad".into();
+        assert!(config.validate().is_err());
+        config.containers[0].ports[0] = "8080:80".into();
+        config.containers[0].restart = "always-on".into();
+        assert!(config.validate().is_err());
     }
 }
