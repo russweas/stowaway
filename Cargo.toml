@@ -1,0 +1,24 @@
+[package]
+name = "stowaway"
+version = "0.1.0"
+edition = "2024"
+description = "Server configuration and networking deployment over SSH"
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+anyhow = "1.0"
+clap = { version = "4.5", features = ["derive"] }
+hex = "0.4"
+serde = { version = "1.0", features = ["derive"] }
+sha2 = "0.10"
+similar = "2.7"
+toml = "0.9"
+
+[dev-dependencies]
+tempfile = "3.20"
+
+[profile.release]
+strip = true
+lto = "thin"
+codegen-units = 1
+panic = "abort"
