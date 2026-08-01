@@ -52,6 +52,12 @@ stowaway --repo ./infra diff server-01
 stowaway --repo ./infra apply server-01
 ```
 
+Create a new machine manifest with its SSH destination prefilled:
+
+```console
+stowaway --repo ./infra init server-01
+```
+
 Use `--yes` to skip the confirmation prompt. `apply` and `pull` require a
 clean Git worktree, so commit the manifest and its files before deploying.
 
@@ -133,6 +139,7 @@ current directory.
 
 | Command | Purpose |
 | --- | --- |
+| `init MACHINE` | Create `machines/MACHINE/machine.toml` with a starter manifest. |
 | `validate [MACHINE]` | Validate one machine, or every machine when omitted. |
 | `lock MACHINE` | Resolve APT ranges and write `machine.lock`. |
 | `diff MACHINE` | Preview differences on a host. |

@@ -93,6 +93,28 @@ impl Repository {
         Ok(names)
     }
 
+    pub fn init_machine(&self, name: &str) -> Result<PathBuf> {
+        validate_machine_name(name)?;
+        let machines = self.root.join("machines");
+        fs::create_dir_all(&machines)
+            .with_context(|| format!("could not create {}", machines.display()))?;
+
+        let directory = machines.join(name);
+        fs::create_dir(&directory).with_context(|| {
+            format!("could not create machine directory {}", directory.display())
+        })?;
+        let path = directory.join("machine.toml");
+        let manifest = format!(
+            "version = 1\n\n[ssh]\ndestination = {destination:?}\n\n[[trees]]\nsource = \"home\"\ntarget = \"~\"\n",
+            destination = name
+        );
+        if let Err(error) = fs::write(&path, manifest) {
+            let _ = fs::remove_dir(&directory);
+            return Err(error).with_context(|| format!("could not write {}", path.display()));
+        }
+        Ok(path)
+    }
+
     pub fn require_clean_worktree(&self) -> Result<()> {
         let output = Command::new("git")
             .args(["status", "--porcelain=v1", "--untracked-files=normal"])
@@ -591,5 +613,28 @@ name = "80-example.rules"
         let temp = fixture();
         let repo = Repository::open(temp.path().to_owned()).unwrap();
         assert!(repo.require_clean_worktree().is_err());
+    }
+
+    #[test]
+    fn initializes_machine_manifest() {
+        let temp = tempfile::tempdir().unwrap();
+        let repo = Repository::open(temp.path().to_owned()).unwrap();
+
+        let path = repo.init_machine("hitl4-sim").unwrap();
+
+        assert_eq!(path, temp.path().join("machines/hitl4-sim/machine.toml"));
+        assert_eq!(
+            fs::read_to_string(path).unwrap(),
+            "version = 1\n\n[ssh]\ndestination = \"hitl4-sim\"\n\n[[trees]]\nsource = \"home\"\ntarget = \"~\"\n"
+        );
+    }
+
+    #[test]
+    fn refuses_to_initialize_existing_machine() {
+        let temp = tempfile::tempdir().unwrap();
+        let repo = Repository::open(temp.path().to_owned()).unwrap();
+        repo.init_machine("existing").unwrap();
+
+        assert!(repo.init_machine("existing").is_err());
     }
 }

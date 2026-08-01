@@ -21,6 +21,10 @@ fn run() -> Result<()> {
     let cli = Cli::parse();
     let repository = Repository::open(cli.repo)?;
     match cli.command {
+        Command::Init { machine } => {
+            let path = repository.init_machine(&machine)?;
+            println!("initialized {machine}: {}", path.display());
+        }
         Command::Validate { machine } => {
             if let Some(machine) = machine {
                 let deployment = repository.load_machine(&machine)?;

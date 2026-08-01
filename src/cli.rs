@@ -15,6 +15,8 @@ pub struct Cli {
 
 #[derive(Debug, Subcommand)]
 pub enum Command {
+    /// Create a new machine manifest.
+    Init { machine: String },
     /// Validate one machine, or every machine when omitted.
     Validate { machine: Option<String> },
     /// Resolve APT package ranges and write the machine lock file.
